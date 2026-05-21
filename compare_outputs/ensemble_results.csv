@@ -1,0 +1,5 @@
+name,accuracy,macro_f1,roc_auc,composite
+Logistic Regression,0.9462,0.9422,0.9975,0.9574
+Random Forest,0.914,0.9125,0.9961,0.9339
+Gradient Boosting,0.9355,0.9364,0.9812,0.9473
+SVM (RBF),0.9355,0.9311,0.997,0.9491

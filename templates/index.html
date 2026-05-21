@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Solar Panel Fault Detection</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<div class="layout">
+
+  <!-- ── Header ─────────────────────────────────────────────────────────── -->
+  <header>
+    <div class="logo">
+      <div class="logo-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2" stroke-linecap="round">
+          <rect x="2" y="7" width="20" height="14" rx="2"/>
+          <path d="M2 11h20M7 7V3M12 7V3M17 7V3"/>
+        </svg>
+      </div>
+      <span class="logo-text">Solar<span>Scan</span></span>
+    </div>
+    <div class="header-meta">
+      <span class="mode-badge">
+        {{ 'Ensemble · LR' if use_ensemble else 'Soft Vote' }}
+      </span>
+      <span>6 fault classes</span>
+      <span>Multi-image</span>
+    </div>
+  </header>
+
+  <!-- ── Sidebar ────────────────────────────────────────────────────────── -->
+  <aside class="sidebar">
+
+    <!-- Upload -->
+    <div class="sidebar-section">
+      <h3>Upload panels</h3>
+      <div class="upload-zone" id="uploadZone">
+        <input type="file" id="fileInput" accept="image/*" multiple>
+        <span class="upload-icon">⬆</span>
+        <p><strong>Click or drag</strong> images here<br>JPG · PNG · WebP · BMP</p>
+      </div>
+    </div>
+
+    <!-- Queue -->
+    <div class="sidebar-section" id="queueSection" style="display:none">
+      <h3>Queue (<span id="queueCount">0</span>)</h3>
+      <div class="queue-list" id="queueList"></div>
+    </div>
+
+    <!-- Analyse button -->
+    <button class="btn-analyse" id="analyseBtn" disabled onclick="runAnalysis()">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+      Analyse
+    </button>
+
+    <!-- Class legend -->
+    <div class="sidebar-section">
+      <h3>Fault classes</h3>
+      <div class="legend-list">
+        {% set severity_map = {
+          'Bird-drop':         ('medium',   'Bird drop'),
+          'Clean':             ('ok',       'Clean'),
+          'Dusty':             ('low',      'Dusty'),
+          'Electrical-damage': ('critical', 'Electrical damage'),
+          'Physical-Damage':   ('critical', 'Physical damage'),
+          'Snow-Covered':      ('medium',   'Snow covered')
+        } %}
+        {% for cls in classes %}
+        {% set sev, label = severity_map[cls] %}
+        <div class="legend-item">
+          <span class="legend-dot dot-{{ sev }}"></span>
+          <span>{{ label }}</span>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+  </aside>
+
+  <!-- ── Main ───────────────────────────────────────────────────────────── -->
+  <main id="main">
+
+    <!-- Empty state -->
+    <div class="empty-state" id="emptyState">
+      <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="1.5">
+        <rect x="4" y="18" width="56" height="36" rx="4"/>
+        <path d="M4 28h56M18 18V10M32 18V10M46 18V10"/>
+        <circle cx="32" cy="40" r="6"/>
+        <path d="M32 34v3M32 43v3M26 40h3M35 40h3"/>
+      </svg>
+      <p>Upload one or more solar panel images to detect faults using the ensemble model.</p>
+    </div>
+
+    <!-- Spinner -->
+    <div class="spinner-wrap" id="spinner">
+      <div class="spinner"></div>
+      <span id="spinnerMsg">Analysing…</span>
+    </div>
+
+    <!-- Summary bar (hidden until results) -->
+    <div class="summary-bar" id="summaryBar" style="display:none">
+      <div class="summary-stat">
+        <strong id="sumTotal">0</strong>
+        <span>images</span>
+      </div>
+      <div class="summary-stat">
+        <strong id="sumClean">0</strong>
+        <span>clean</span>
+      </div>
+      <div class="summary-stat">
+        <strong id="sumFaults">0</strong>
+        <span>faults</span>
+      </div>
+      <div class="summary-stat">
+        <strong id="sumCritical">0</strong>
+        <span>critical</span>
+      </div>
+      <div class="summary-stat">
+        <strong id="sumAvgConf">—</strong>
+        <span>avg confidence</span>
+      </div>
+      <div class="summary-stat" style="margin-left:auto">
+        <strong id="sumTime">—</strong>
+        <span>total ms</span>
+      </div>
+    </div>
+
+    <!-- Results grid -->
+    <div class="results-grid" id="resultsGrid"></div>
+
+  </main>
+</div>
+
+<script>
+// ── File queue ──────────────────────────────────────────────────────────────
+let fileQueue = [];
+
+const fileInput   = document.getElementById('fileInput');
+const uploadZone  = document.getElementById('uploadZone');
+const queueSection= document.getElementById('queueSection');
+const queueList   = document.getElementById('queueList');
+const queueCount  = document.getElementById('queueCount');
+const analyseBtn  = document.getElementById('analyseBtn');
+
+fileInput.addEventListener('change', e => addFiles(Array.from(e.target.files)));
+
+uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('dragover'); });
+uploadZone.addEventListener('dragleave', ()=> uploadZone.classList.remove('dragover'));
+uploadZone.addEventListener('drop', e => {
+  e.preventDefault();
+  uploadZone.classList.remove('dragover');
+  addFiles(Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/')));
+});
+
+function addFiles(files) {
+  files.forEach(f => {
+    if (!fileQueue.find(q => q.name === f.name && q.size === f.size)) {
+      fileQueue.push(f);
+    }
+  });
+  renderQueue();
+}
+
+function removeFile(idx) {
+  fileQueue.splice(idx, 1);
+  renderQueue();
+}
+
+function renderQueue() {
+  queueList.innerHTML = '';
+  fileQueue.forEach((f, i) => {
+    const url = URL.createObjectURL(f);
+    const item = document.createElement('div');
+    item.className = 'queue-item';
+    item.innerHTML = `
+      <img class="queue-thumb" src="${url}" alt="">
+      <span class="queue-name">${f.name}</span>
+      <button class="queue-remove" onclick="removeFile(${i})">×</button>`;
+    queueList.appendChild(item);
+  });
+  const has = fileQueue.length > 0;
+  queueSection.style.display = has ? 'block' : 'none';
+  queueCount.textContent = fileQueue.length;
+  analyseBtn.disabled = !has;
+  fileInput.value = '';
+}
+
+// ── Analysis ────────────────────────────────────────────────────────────────
+async function runAnalysis() {
+  if (!fileQueue.length) return;
+
+  // UI: show spinner, hide empty/results
+  document.getElementById('emptyState').style.display  = 'none';
+  document.getElementById('summaryBar').style.display  = 'none';
+  document.getElementById('resultsGrid').innerHTML     = '';
+  const spinner = document.getElementById('spinner');
+  spinner.classList.add('visible');
+  document.getElementById('spinnerMsg').textContent =
+    `Analysing ${fileQueue.length} image${fileQueue.length > 1 ? 's' : ''}…`;
+  analyseBtn.disabled = true;
+
+  const form = new FormData();
+  fileQueue.forEach(f => form.append('images', f));
+
+  const t0 = performance.now();
+  let results;
+  try {
+    const res = await fetch('/predict', { method: 'POST', body: form });
+    results   = await res.json();
+  } catch(e) {
+    spinner.classList.remove('visible');
+    analyseBtn.disabled = false;
+    alert('Server error: ' + e.message);
+    return;
+  }
+
+  const elapsed = Math.round(performance.now() - t0);
+  spinner.classList.remove('visible');
+  renderResults(results, elapsed);
+  analyseBtn.disabled = false;
+}
+
+// ── Render results ──────────────────────────────────────────────────────────
+function renderResults(results, totalMs) {
+  const grid = document.getElementById('resultsGrid');
+  grid.innerHTML = '';
+
+  let clean=0, faults=0, critical=0, confSum=0, confCount=0;
+
+  results.forEach((r, idx) => {
+    if (r.error) {
+      const el = document.createElement('div');
+      el.className = 'error-card';
+      el.innerHTML = `<span>✕</span><span>${r.filename}: ${r.error}</span>`;
+      grid.appendChild(el);
+      return;
+    }
+
+    // summary stats
+    if (r.predicted_class === 'Clean') clean++;
+    else faults++;
+    if (r.severity === 'critical') critical++;
+    confSum   += r.confidence;
+    confCount++;
+
+    const card = document.createElement('div');
+    card.className = 'result-card';
+    card.style.animationDelay = `${idx * 60}ms`;
+
+    // Sort probs
+    const probs = Object.entries(r.probabilities).sort((a,b)=>b[1]-a[1]);
+    const topClass = probs[0][0];
+
+    const probRows = probs.map(([cls, pct]) => `
+      <div class="prob-row">
+        <span class="prob-label">${cls}</span>
+        <div class="prob-track">
+          <div class="prob-fill ${cls===topClass?'top':''}"
+               style="width:${pct}%"></div>
+        </div>
+        <span class="prob-val">${pct.toFixed(1)}%</span>
+      </div>`).join('');
+
+    // Per-model breakdown
+    const modelRows = Object.entries(r.model_probs || {}).map(([model, probs]) => {
+      const top = Object.entries(probs).sort((a,b)=>b[1]-a[1])[0];
+      return `<div class="model-row">
+        <span class="model-name">${model}</span>
+        <span class="model-top-class">${top[0]}</span>
+        <span class="model-conf">${top[1].toFixed(1)}%</span>
+      </div>`;
+    }).join('');
+
+    card.innerHTML = `
+      <div class="card-image-wrap">
+        <img src="${r.thumbnail}" alt="${r.filename}" loading="lazy">
+        <span class="card-severity-badge sev-${r.severity}">${r.severity}</span>
+      </div>
+      <div class="card-body">
+        <div class="card-filename">${r.filename}</div>
+        <div class="card-class">
+          ${r.predicted_class}
+          <span class="card-confidence">${r.confidence.toFixed(1)}%</span>
+        </div>
+        <p class="card-desc">${r.description}</p>
+        <div class="action-banner action-${r.action_type}">
+          <span class="action-icon">${r.action_type === 'ok' ? '✔' : r.action_type === 'repair' ? '⚠' : '⟳'}</span>
+          <div>
+            <div class="action-title">${r.action_title}</div>
+            <div class="action-detail">${r.action_detail}</div>
+          </div>
+        </div>
+        <div class="prob-bars">${probRows}</div>
+        ${modelRows ? `
+        <div class="model-breakdown">
+          <button class="breakdown-toggle" onclick="toggleBreakdown(this)">
+            ▸ Model breakdown
+          </button>
+          <div class="breakdown-content">
+            <div class="model-row" style="margin-bottom:4px">
+              <span class="model-name" style="color:var(--text3);font-size:0.62rem">Model</span>
+              <span class="model-top-class" style="color:var(--text3);font-size:0.62rem">Top class</span>
+              <span class="model-conf" style="color:var(--text3);font-size:0.62rem">Conf</span>
+            </div>
+            ${modelRows}
+          </div>
+        </div>` : ''}
+      </div>`;
+
+    grid.appendChild(card);
+  });
+
+  // Summary bar
+  const bar = document.getElementById('summaryBar');
+  bar.style.display = 'flex';
+  document.getElementById('sumTotal').textContent    = confCount;
+  document.getElementById('sumClean').textContent    = clean;
+  document.getElementById('sumFaults').textContent   = faults;
+  document.getElementById('sumCritical').textContent = critical;
+  document.getElementById('sumAvgConf').textContent  =
+    confCount ? (confSum/confCount).toFixed(1)+'%' : '—';
+  document.getElementById('sumTime').textContent     = totalMs + 'ms';
+}
+
+function toggleBreakdown(btn) {
+  const content = btn.nextElementSibling;
+  const open    = content.classList.toggle('open');
+  btn.textContent = (open ? '▾' : '▸') + ' Model breakdown';
+}
+</script>
+</body>
+</html>

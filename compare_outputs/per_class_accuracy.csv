@@ -1,0 +1,7 @@
+class,VGG16,EfficientNetB3,MobileNetV2,avg,best_model
+Bird-drop,0.8824,0.8824,0.8824,0.8824,VGG16
+Clean,0.8889,0.9444,1.0,0.9444,MobileNetV2
+Dusty,0.8,0.8667,0.7333,0.8,EfficientNetB3
+Electrical-damage,0.8333,0.9167,0.8333,0.8611,EfficientNetB3
+Physical-Damage,0.8571,0.8571,0.7857,0.8333,VGG16
+Snow-Covered,0.9412,0.8824,0.9412,0.9216,VGG16
