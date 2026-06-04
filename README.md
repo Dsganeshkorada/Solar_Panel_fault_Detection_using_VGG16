@@ -182,7 +182,7 @@ To train the stacking ensemble and generate `meta_learner.pkl`, run `stacking_en
   - Severity badge (ok / medium / critical)
   - Action warning (No action needed / Cleaning required / Repair required)
   - All 6 class probability bars
-  - Collapsible model breakdown showing VGG16 and MobileNetV2 comparative predictions
+  - It gives a recommendation like 'clean' or 'maintances'
 - Summary bar showing total images, fault count, critical count, and average confidence
 
 ---
